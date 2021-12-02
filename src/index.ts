@@ -1,9 +1,3 @@
-export const foo = 'bar'
+import RenameClassWebpackPlugin from './plugin'
 
-export const wait = (timeout?: number) => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve(true)
-    }, timeout)
-  })
-}
+export = RenameClassWebpackPlugin;

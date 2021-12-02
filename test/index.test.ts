@@ -1,12 +1,226 @@
-import { foo, wait } from '../src'
+import path from 'path'
+import fs from 'fs'
+import rimraf from 'rimraf'
+import webpack from 'webpack'
 
-describe('[Default]', () => {
-  test('foo should be bar', () => {
-    expect(foo).toBe('bar')
+const webpackMajorVersion = Number(require('webpack/package.json').version.split('.')[0])
+if (webpackMajorVersion < 4) {
+  var CommonsChunkPlugin = require('webpack/lib/optimize/CommonsChunkPlugin')
+}
+const RenameClassWebpackPlugin = require('../index.js')
+const ClassGenerator = require('../lib/classGenerator')
+
+const OUTPUT_DIR = path.join(__dirname, '../dist')
+
+const testPlugin = (webpackConfig, expectedResults, done, expectErrors?, expectWarnings?) => {
+  if (webpackMajorVersion >= 4) {
+    webpackConfig.mode = 'development'
+    if (webpackConfig.module && webpackConfig.module.loaders) {
+      webpackConfig.module.rules = webpackConfig.module.loaders
+      delete webpackConfig.module.loaders
+    }
+  }
+  if (webpackConfig.__commonsChunk) {
+    if (webpackMajorVersion < 4) {
+      webpackConfig.plugins = webpackConfig.plugins || []
+      webpackConfig.plugins.unshift(new CommonsChunkPlugin(webpackConfig.__commonsChunk))
+    } else {
+      // eslint-disable-next-line no-undef
+      webpackConfig.optimization = transformCommonChunkConfigToOptimization(webpackConfig.__commonsChunk)
+    }
+    delete webpackConfig.__commonsChunk
+  }
+  webpack(webpackConfig, (err, stats) => {
+    expect(err).toBeFalsy()
+    const compilationErrors = (stats.compilation.errors || []).join('\n')
+    if (expectErrors) {
+      expect(compilationErrors).not.toBe('')
+    } else {
+      expect(compilationErrors).toBe('')
+    }
+    const compilationWarnings = (stats.compilation.warnings || []).join('\n')
+    if (expectWarnings) {
+      expect(compilationWarnings).not.toBe('')
+    } else {
+      expect(compilationWarnings).toBe('')
+    }
+    const outputFileExists = fs.existsSync(path.join(OUTPUT_DIR, webpackConfig.output.filename))
+    expect(outputFileExists).toBe(true)
+    if (!outputFileExists) {
+      return done()
+    }
+    const content = fs.readFileSync(path.join(OUTPUT_DIR, webpackConfig.output.filename)).toString()
+    for (let i = 0; i < expectedResults.length; i++) {
+      const expectedResult = expectedResults[i]
+      if (expectedResult instanceof RegExp) {
+        expect(content).toMatch(expectedResult)
+      } else {
+        expect(content).toContain(expectedResult)
+      }
+    }
+    done()
+  })
+}
+
+const defaultCssClassRegExp = '[cl]-[a-z][a-zA-Z0-9_]*'
+
+describe('RenameClassWebpackPlugin', () => {
+  beforeEach((done) => {
+    rimraf(OUTPUT_DIR, done)
   })
 
-  test('wait 100ms', async () => {
-    const flag = await wait(100)
-    expect(flag).toBe(true)
+  it('replace a css class', (done) => {
+    testPlugin({
+      entry: [path.join(__dirname, 'fixtures/case1.js')],
+      output: {
+        path: OUTPUT_DIR,
+        filename: 'case1.js'
+      },
+      plugins: [new RenameClassWebpackPlugin({
+        classNameRegExp: defaultCssClassRegExp,
+        log: true
+      })]
+    }, ['<p class=\\"a\\">l-a</p>'], done)
+  })
+
+  it('replace multiple css classes with css and html', (done) => {
+    testPlugin({
+      entry: path.join(__dirname, 'fixtures/case2.js'),
+      output: {
+        path: OUTPUT_DIR,
+        filename: 'case2.js'
+      },
+      module: {
+        rules: [
+          {
+            test: /\.css$/,
+            use: ['style-loader', 'css-loader']
+          },
+          {
+            test: /\.html$/,
+            use: {
+              loader: 'html-loader'
+            }
+          }
+        ]
+      },
+      plugins: [new RenameClassWebpackPlugin({
+        classNameRegExp: defaultCssClassRegExp,
+        log: true
+      })]
+    }, [".a {\\\\n  width: '100%';\\\\n}", '<div class=\\\\\\"a\\\\\\">', '<p class=\\"a b a\\"><div /><a class=\\"b\\">l-a</p>'], done)
+  })
+
+  it('ensure ignore custom classname prefixes', (done) => {
+    testPlugin({
+      entry: path.join(__dirname, 'fixtures/case3.js'),
+      output: {
+        path: OUTPUT_DIR,
+        filename: 'case3.js'
+      },
+      module: {
+        rules: [
+          {
+            test: /\.css$/,
+            use: ['style-loader', 'css-loader']
+          },
+          {
+            test: /\.html$/,
+            use: {
+              loader: 'html-loader'
+            }
+          }
+        ]
+      },
+      plugins: [new RenameClassWebpackPlugin({
+        classNameRegExp: '(xs:|md:)?[cl]-[a-z][a-zA-Z0-9_]*',
+        ignorePrefix: ['xs:', 'md:'],
+        log: true
+      })]
+    }, ['<div class=\\\\\\"a xs:a md:b\\\\\\">\\\\n      <p>l-a</p>\\\\n      <p>md:l-b</p>\\\\n    </div>'], done)
+  })
+
+  it('do not have dupplicate class name', (done) => {
+    const classes = new Set()
+    const classGenerator = new ClassGenerator()
+    const n = 40
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        for (let k = 0; k < n; k++) {
+          const className = classGenerator.generateClassName(`l-${i}-${j}-${k}`, { log: false })
+          classes.add(className.name)
+        }
+      }
+    }
+    console.log('Generated class size:', classes.size)
+    expect(classes.size).toBe(Math.pow(n, 3))
+    expect(classes).toContain('a')
+    expect(classes).toContain('_')
+    expect(classes).toContain('a9')
+    expect(classes).toContain('aaa')
+    expect(classes).toContain('_99')
+    done()
+  })
+
+  it('do not use reserved class names', (done) => {
+    const reservedClassNames = ['b', 'd']
+    const classes = new Set()
+    const classGenerator = new ClassGenerator()
+    const n = 3
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        for (let k = 0; k < n; k++) {
+          const className = classGenerator.generateClassName(`l-${i}-${j}-${k}`, {
+            reserveClassName: reservedClassNames,
+            log: true
+          })
+          classes.add(className.name)
+        }
+      }
+    }
+    console.log('Generated class size:', classes.size)
+    expect(classes.size).toBe(Math.pow(n, 3))
+    expect(classes).toContain('a')
+    expect(classes).not.toContain('b')
+    expect(classes).toContain('c')
+    expect(classes).not.toContain('d')
+    expect(classes).toContain('e')
+    done()
+  })
+
+  it('ignore escape char in class name', (done) => {
+    const classGenerator = new ClassGenerator()
+    const classNameWithEscape = classGenerator.generateClassName('l-\\/a\\/b', {
+      log: true
+    })
+    const classNameWithoutEscape = classGenerator.generateClassName('l-/a/b', {
+      log: true
+    })
+    expect(classNameWithEscape.name).toBe(classNameWithoutEscape.name)
+    done()
+  })
+
+  it('override class name generator', (done) => {
+    testPlugin({
+      entry: [path.join(__dirname, 'fixtures/case4.js')],
+      output: {
+        path: OUTPUT_DIR,
+        filename: 'case4.js'
+      },
+      plugins: [new RenameClassWebpackPlugin({
+        classNameRegExp: defaultCssClassRegExp,
+        log: true,
+        classGenerator: (original, opts, context) => {
+          if (!context.id) {
+            context.id = 1
+          }
+          if (original.startsWith('c-')) {
+            const className = `c${context.id}`
+            context.id++
+            return className
+          }
+        }
+      })]
+    }, ['<p class=\\"c1\\">hoge-a<div class=\\"b c1\\">CASE 4</div></p>'], done)
   })
 })
