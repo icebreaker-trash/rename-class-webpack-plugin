@@ -1,37 +1,25 @@
-import type { Compilation, Compiler, Stats } from 'webpack'
+import type { Compilation, Compiler } from 'webpack'
 
-import optimizer from './optimizer'
+interface UserDefinedOptions{
 
-export interface Options {}
-const runner = (
-  compiler: Compiler,
-  compilation: Compilation,
-  opts: Options
-) => {
-  const optimize = optimizer(compiler, compilation, opts)
-  return (chunks, callback) => {
-    optimize(chunks)
-    callback()
-  }
 }
 
-class RenameClassWebpackPlugin {
-  private opts: Options
-  constructor (opts: Options = {}) {
-    this.opts = opts
+const pluginName = 'RenameClassWebpackPlugin'
+export class RenameClassWebpackPlugin {
+  options: UserDefinedOptions
+
+  constructor (options: UserDefinedOptions) {
+    this.options = options
   }
 
-  apply (compiler: Compiler) {
+  apply (compiler: Compiler): void {
     compiler.hooks.compilation.tap(
-      'RenameClassWebpackPluginHooks',
-      (compilation) => {
-        compilation.hooks.optimizeChunkAssets.tapAsync(
-          'RenameClassWebpackPluginOptimizeChunkAssetsHooks',
-          runner(compiler, compilation, this.opts)
-        )
-      }
+      pluginName,
+      this.initializePlugin.bind(this)
     )
   }
-}
 
-export { RenameClassWebpackPlugin }
+  initializePlugin (compilation: Compilation): void {
+    // compilation.hooks.
+  }
+}
